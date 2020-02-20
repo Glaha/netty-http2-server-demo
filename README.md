@@ -1,2 +1,2 @@
-# netty-aggregator-demo
-demo for netty http aggregator server/client
+# netty-http2-server-demo
+http2-server-demo

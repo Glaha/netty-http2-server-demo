@@ -27,6 +27,7 @@ import io.netty.handler.codec.http2.Http2FrameStream;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.util.CharsetUtil;
+import io.netty.util.internal.StringUtil;
 
 import static io.netty.buffer.Unpooled.copiedBuffer;
 import static io.netty.buffer.Unpooled.unreleasableBuffer;
@@ -40,6 +41,7 @@ import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 @Sharable
 public class HelloWorldHttp2Handler extends ChannelDuplexHandler {
 
+    static final String json_small ="[{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"}";
 
     static final String json="[{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"}," +
             "{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"}," +
@@ -203,6 +205,7 @@ public class HelloWorldHttp2Handler extends ChannelDuplexHandler {
             "{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"},]";
 
     static final ByteBuf RESPONSE_BYTES = unreleasableBuffer(copiedBuffer(json, CharsetUtil.UTF_8));
+    static final ByteBuf RESPONSE_BYTES_SMALL = unreleasableBuffer(copiedBuffer(json_small, CharsetUtil.UTF_8));
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
@@ -251,7 +254,12 @@ public class HelloWorldHttp2Handler extends ChannelDuplexHandler {
             throws Exception {
         if (headers.isEndStream()) {
             ByteBuf content = ctx.alloc().buffer();
-            content.writeBytes(RESPONSE_BYTES.duplicate());
+            String json = System.getenv("GLAHA_HTTP2_RESPONSE_SIZE");
+            if (StringUtil.isNullOrEmpty(json) || json.equalsIgnoreCase("big")) {
+                content.writeBytes(RESPONSE_BYTES.duplicate());
+            } else {
+                content.writeBytes(RESPONSE_BYTES_SMALL.duplicate());
+            }
             ByteBufUtil.writeAscii(content, " - via HTTP/2");
 
             sendResponse(ctx, headers.stream(), content);

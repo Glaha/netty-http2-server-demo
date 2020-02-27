@@ -26,6 +26,7 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpServerUpgradeHandler;
 import io.netty.handler.codec.http.HttpServerUpgradeHandler.UpgradeCodec;
 import io.netty.handler.codec.http.HttpServerUpgradeHandler.UpgradeCodecFactory;
+import io.netty.handler.codec.http2.CleartextHttp2ServerUpgradeHandler;
 import io.netty.handler.codec.http2.Http2CodecUtil;
 import io.netty.handler.codec.http2.Http2FrameCodecBuilder;
 import io.netty.handler.codec.http2.Http2ServerUpgradeCodec;
@@ -44,7 +45,7 @@ public class Http2ServerInitializer extends ChannelInitializer<SocketChannel> {
         public UpgradeCodec newUpgradeCodec(CharSequence protocol) {
             if (AsciiString.contentEquals(Http2CodecUtil.HTTP_UPGRADE_PROTOCOL_NAME, protocol)) {
                 return new Http2ServerUpgradeCodec(
-                        Http2FrameCodecBuilder.forServer().build(), new HelloWorldHttp2Handler());
+                         new HelloWorldHttp2HandlerBuilder().build());
             } else {
                 return null;
             }
@@ -89,8 +90,9 @@ public class Http2ServerInitializer extends ChannelInitializer<SocketChannel> {
         final ChannelPipeline p = ch.pipeline();
         final HttpServerCodec sourceCodec = new HttpServerCodec();
 
-        p.addLast(sourceCodec);
-        p.addLast(new HttpServerUpgradeHandler(sourceCodec, upgradeCodecFactory));
+//        p.addLast(sourceCodec);
+//        p.addLast(new HttpServerUpgradeHandler(sourceCodec, upgradeCodecFactory));
+        p.addLast(new CleartextHttp2ServerUpgradeHandler(sourceCodec, new HttpServerUpgradeHandler(sourceCodec, upgradeCodecFactory), new HelloWorldHttp2HandlerBuilder().build()));
         p.addLast(new SimpleChannelInboundHandler<HttpMessage>() {
             @Override
             protected void channelRead0(ChannelHandlerContext ctx, HttpMessage msg) throws Exception {
@@ -112,7 +114,6 @@ public class Http2ServerInitializer extends ChannelInitializer<SocketChannel> {
     private static class UserEventLogger extends ChannelInboundHandlerAdapter {
         @Override
         public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
-            System.out.println("User Event Triggered: " + evt);
             ctx.fireUserEventTriggered(evt);
         }
     }

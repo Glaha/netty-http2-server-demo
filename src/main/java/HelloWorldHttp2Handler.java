@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 The Netty Project
+ * Copyright 2014 The Netty Project
  *
  * The Netty Project licenses this file to you under the Apache License, version 2.0 (the
  * "License"); you may not use this file except in compliance with the License. You may obtain a
@@ -15,17 +15,9 @@
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
-import io.netty.channel.ChannelDuplexHandler;
-import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
-import io.netty.handler.codec.http2.DefaultHttp2Headers;
-import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
-import io.netty.handler.codec.http2.DefaultHttp2WindowUpdateFrame;
-import io.netty.handler.codec.http2.Http2DataFrame;
-import io.netty.handler.codec.http2.Http2FrameStream;
-import io.netty.handler.codec.http2.Http2Headers;
-import io.netty.handler.codec.http2.Http2HeadersFrame;
+import io.netty.handler.codec.http.*;
+import io.netty.handler.codec.http2.*;
 import io.netty.util.CharsetUtil;
 import io.netty.util.internal.StringUtil;
 
@@ -35,11 +27,8 @@ import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 
 /**
  * A simple handler that responds with the message "Hello World!".
- *
- * <p>This example is making use of the "frame codec" http2 API. This API is very experimental and incomplete.
  */
-@Sharable
-public class HelloWorldHttp2Handler extends ChannelDuplexHandler {
+public final class HelloWorldHttp2Handler extends Http2ConnectionHandler implements Http2FrameListener {
 
     static final String json_small ="[{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"},{\"key\":\"Helloworld\"}";
 
@@ -207,6 +196,38 @@ public class HelloWorldHttp2Handler extends ChannelDuplexHandler {
     static final ByteBuf RESPONSE_BYTES = unreleasableBuffer(copiedBuffer(json, CharsetUtil.UTF_8));
     static final ByteBuf RESPONSE_BYTES_SMALL = unreleasableBuffer(copiedBuffer(json_small, CharsetUtil.UTF_8));
 
+
+    HelloWorldHttp2Handler(Http2ConnectionDecoder decoder, Http2ConnectionEncoder encoder,
+                           Http2Settings initialSettings) {
+        super(decoder, encoder, initialSettings);
+    }
+
+    private static Http2Headers http1HeadersToHttp2Headers(FullHttpRequest request) {
+        CharSequence host = request.headers().get(HttpHeaderNames.HOST);
+        Http2Headers http2Headers = new DefaultHttp2Headers()
+                .method(HttpMethod.GET.asciiName())
+                .path(request.uri())
+                .scheme(HttpScheme.HTTP.name());
+        if (host != null) {
+            http2Headers.authority(host);
+        }
+        return http2Headers;
+    }
+
+    /**
+     * Handles the cleartext HTTP upgrade event. If an upgrade occurred, sends a simple response via HTTP/2
+     * on stream 1 (the stream specifically reserved for cleartext HTTP upgrade).
+     */
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (evt instanceof HttpServerUpgradeHandler.UpgradeEvent) {
+            HttpServerUpgradeHandler.UpgradeEvent upgradeEvent =
+                    (HttpServerUpgradeHandler.UpgradeEvent) evt;
+            onHeadersRead(ctx, 1, http1HeadersToHttp2Headers(upgradeEvent.upgradeRequest()), 0 , true);
+        }
+        super.userEventTriggered(ctx, evt);
+    }
+
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
         super.exceptionCaught(ctx, cause);
@@ -214,45 +235,31 @@ public class HelloWorldHttp2Handler extends ChannelDuplexHandler {
         ctx.close();
     }
 
-    @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof Http2HeadersFrame) {
-            onHeadersRead(ctx, (Http2HeadersFrame) msg);
-        } else if (msg instanceof Http2DataFrame) {
-            onDataRead(ctx, (Http2DataFrame) msg);
-        } else {
-            super.channelRead(ctx, msg);
-        }
-    }
-
-    @Override
-    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
-        ctx.flush();
-    }
-
     /**
-     * If receive a frame with end-of-stream set, send a pre-canned response.
+     * Sends a "Hello World" DATA frame to the client.
      */
-    private static void onDataRead(ChannelHandlerContext ctx, Http2DataFrame data) throws Exception {
-        Http2FrameStream stream = data.stream();
+    private void sendResponse(ChannelHandlerContext ctx, int streamId, ByteBuf payload) {
+        // Send a frame for the response status
+        Http2Headers headers = new DefaultHttp2Headers().status(OK.codeAsText());
+        encoder().writeHeaders(ctx, streamId, headers, 0, false, ctx.newPromise());
+        encoder().writeData(ctx, streamId, payload, 0, true, ctx.newPromise());
 
-        if (data.isEndStream()) {
-            sendResponse(ctx, stream, data.content());
-        } else {
-            // We do not send back the response to the remote-peer, so we need to release it.
-            data.release();
-        }
-
-        // Update the flowcontroller
-        ctx.write(new DefaultHttp2WindowUpdateFrame(data.initialFlowControlledBytes()).stream(stream));
+        // no need to call flush as channelReadComplete(...) will take care of it.
     }
 
-    /**
-     * If receive a frame with end-of-stream set, send a pre-canned response.
-     */
-    private static void onHeadersRead(ChannelHandlerContext ctx, Http2HeadersFrame headers)
-            throws Exception {
-        if (headers.isEndStream()) {
+    @Override
+    public int onDataRead(ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding, boolean endOfStream) {
+        int processed = data.readableBytes() + padding;
+        if (endOfStream) {
+            sendResponse(ctx, streamId, data.retain());
+        }
+        return processed;
+    }
+
+    @Override
+    public void onHeadersRead(ChannelHandlerContext ctx, int streamId,
+                              Http2Headers headers, int padding, boolean endOfStream) {
+        if (endOfStream) {
             ByteBuf content = ctx.alloc().buffer();
             String json = System.getenv("GLAHA_HTTP2_RESPONSE_SIZE");
             if (StringUtil.isNullOrEmpty(json) || json.equalsIgnoreCase("big")) {
@@ -262,17 +269,56 @@ public class HelloWorldHttp2Handler extends ChannelDuplexHandler {
             }
             ByteBufUtil.writeAscii(content, " - via HTTP/2");
 
-            sendResponse(ctx, headers.stream(), content);
+            sendResponse(ctx, streamId, content);
         }
     }
 
-    /**
-     * Sends a "Hello World" DATA frame to the client.
-     */
-    private static void sendResponse(ChannelHandlerContext ctx, Http2FrameStream stream, ByteBuf payload) {
-        // Send a frame for the response status
-        Http2Headers headers = new DefaultHttp2Headers().status(OK.codeAsText());
-        ctx.write(new DefaultHttp2HeadersFrame(headers).stream(stream));
-        ctx.write(new DefaultHttp2DataFrame(payload, true).stream(stream));
+    @Override
+    public void onHeadersRead(ChannelHandlerContext ctx, int streamId, Http2Headers headers, int streamDependency,
+                              short weight, boolean exclusive, int padding, boolean endOfStream) {
+        onHeadersRead(ctx, streamId, headers, padding, endOfStream);
+    }
+
+    @Override
+    public void onPriorityRead(ChannelHandlerContext ctx, int streamId, int streamDependency,
+                               short weight, boolean exclusive) {
+    }
+
+    @Override
+    public void onRstStreamRead(ChannelHandlerContext ctx, int streamId, long errorCode) {
+    }
+
+    @Override
+    public void onSettingsAckRead(ChannelHandlerContext ctx) {
+    }
+
+    @Override
+    public void onSettingsRead(ChannelHandlerContext ctx, Http2Settings settings) {
+    }
+
+    @Override
+    public void onPingRead(ChannelHandlerContext ctx, long data) {
+    }
+
+    @Override
+    public void onPingAckRead(ChannelHandlerContext ctx, long data) {
+    }
+
+    @Override
+    public void onPushPromiseRead(ChannelHandlerContext ctx, int streamId, int promisedStreamId,
+                                  Http2Headers headers, int padding) {
+    }
+
+    @Override
+    public void onGoAwayRead(ChannelHandlerContext ctx, int lastStreamId, long errorCode, ByteBuf debugData) {
+    }
+
+    @Override
+    public void onWindowUpdateRead(ChannelHandlerContext ctx, int streamId, int windowSizeIncrement) {
+    }
+
+    @Override
+    public void onUnknownFrame(ChannelHandlerContext ctx, byte frameType, int streamId,
+                               Http2Flags flags, ByteBuf payload) {
     }
 }

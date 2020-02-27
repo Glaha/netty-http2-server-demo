@@ -28,6 +28,7 @@ import io.netty.handler.ssl.ApplicationProtocolConfig.Protocol;
 import io.netty.handler.ssl.ApplicationProtocolConfig.SelectedListenerFailureBehavior;
 import io.netty.handler.ssl.ApplicationProtocolConfig.SelectorFailureBehavior;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import io.netty.util.internal.StringUtil;
 
 /**
  * An HTTP/2 Server that responds to requests with a Hello World. Once started, you can test the
@@ -39,15 +40,20 @@ import io.netty.handler.ssl.util.SelfSignedCertificate;
 public final class Http2Server {
 
     //    static final boolean SSL = System.getProperty("ssl") != null;
-    static final boolean SSL = true;
-    static String port = System.getenv("GLAHA_HTTP2_PORT");
-    static final int PORT = Integer.parseInt(port);
-//    static final int PORT = Integer.parseInt(System.getProperty(port, SSL? "8443" : "8080"));
+//    static final boolean SSL = true;
+    static final boolean SSL = System.getProperty("ssl") != null;
+//    static String port = System.getenv("GLAHA_HTTP2_PORT");
+//    static final int PORT = Integer.parseInt(port);
+    static final int PORT = Integer.parseInt(System.getProperty("port", SSL? "8443" : "8080"));
 
     public static void main(String[] args) throws Exception {
+        String sport = System.getenv("GLAHA_HTTP2_PORT");
+        int port = StringUtil.isNullOrEmpty(sport)?PORT:Integer.valueOf(sport);
+        String sssl = System.getenv("GLAHA_HTTP2_SSL");
+        boolean ssl = StringUtil.isNullOrEmpty(sssl)?SSL:Boolean.valueOf(sssl);
         // Configure SSL.
         final SslContext sslCtx;
-        if (SSL) {
+        if (ssl) {
             SslProvider provider = OpenSsl.isAlpnSupported() ? SslProvider.OPENSSL : SslProvider.JDK;
             SelfSignedCertificate ssc = new SelfSignedCertificate();
             sslCtx = SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey())
@@ -77,10 +83,10 @@ public final class Http2Server {
              .handler(new LoggingHandler(LogLevel.INFO))
              .childHandler(new Http2ServerInitializer(sslCtx));
 
-            Channel ch = b.bind(PORT).sync().channel();
+            Channel ch = b.bind(port).sync().channel();
 
             System.err.println("Open your HTTP/2-enabled web browser and navigate to " +
-                    (SSL? "https" : "http") + "://127.0.0.1:" + PORT + '/');
+                    (ssl? "https" : "http") + "://127.0.0.1:" + port + '/');
 
             ch.closeFuture().sync();
         } finally {
